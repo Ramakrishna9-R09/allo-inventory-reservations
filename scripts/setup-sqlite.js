@@ -10,7 +10,7 @@ let schemaContent = fs.readFileSync(schemaPath, "utf8");
 
 schemaContent = schemaContent
   .replace(/provider\s*=\s*"postgresql"/, 'provider = "sqlite"')
-  .replace(/\s*directUrl\s*=\s*env\("DIRECT_URL"\)/, "")
+  .replace(/\s*directUrl\s*=\s*env\("[^"]+"\)/, "")
   .replace(/status\s*ReservationStatus\s*@default\(PENDING\)/, 'status         String            @default("PENDING")')
   .replace(/\s*enum\s*ReservationStatus\s*\{[\s\S]*?\}/, "");
 
