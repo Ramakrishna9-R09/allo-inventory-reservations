@@ -1,7 +1,7 @@
-import { Prisma, ReservationStatus } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
-import { prisma } from "@/lib/db";
+import { prisma, ReservationStatus, isSQLite } from "@/lib/db";
 import { ApiException, apiError, exceptionResponse } from "@/lib/errors";
 import { ReservationIdSchema } from "@/lib/schemas";
 
@@ -38,17 +38,41 @@ export async function POST(_request: Request, { params }: RouteContext) {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      const rows = await tx.$queryRaw<LockedReservation[]>`
-        SELECT id, "productId", "warehouseId", quantity, status, "expiresAt"
-        FROM "Reservation"
-        WHERE id = ${parsed.data.id}
-        FOR UPDATE NOWAIT
-      `;
+      let current: LockedReservation | undefined;
 
-      const current = rows[0];
+      if (isSQLite) {
+        const res = await tx.reservation.findUnique({
+          where: { id: parsed.data.id },
+        });
+        if (res) {
+          current = {
+            id: res.id,
+            productId: res.productId,
+            warehouseId: res.warehouseId,
+            quantity: res.quantity,
+            status: res.status as ReservationStatus,
+            expiresAt: res.expiresAt,
+          };
+        }
+      } else {
+        const rows = await tx.$queryRaw<LockedReservation[]>`
+          SELECT id, "productId", "warehouseId", quantity, status, "expiresAt"
+          FROM "Reservation"
+          WHERE id = ${parsed.data.id}
+          FOR UPDATE NOWAIT
+        `;
+        current = rows[0];
+      }
 
       if (!current) {
         throw new ApiException(404, "NOT_FOUND", "Reservation not found");
+      }
+
+      if (current.status === ReservationStatus.CONFIRMED) {
+        const fullReservation = await tx.reservation.findUniqueOrThrow({
+          where: { id: current.id },
+        });
+        return { status: "confirmed" as const, reservation: fullReservation };
       }
 
       if (current.status !== ReservationStatus.PENDING) {
@@ -60,13 +84,15 @@ export async function POST(_request: Request, { params }: RouteContext) {
       }
 
       if (current.expiresAt <= new Date()) {
-        await tx.$queryRaw`
-          SELECT id
-          FROM "Stock"
-          WHERE "productId" = ${current.productId}
-            AND "warehouseId" = ${current.warehouseId}
-          FOR UPDATE NOWAIT
-        `;
+        if (!isSQLite) {
+          await tx.$queryRaw`
+            SELECT id
+            FROM "Stock"
+            WHERE "productId" = ${current.productId}
+              AND "warehouseId" = ${current.warehouseId}
+            FOR UPDATE NOWAIT
+          `;
+        }
 
         await tx.reservation.update({
           where: { id: current.id },
@@ -88,13 +114,15 @@ export async function POST(_request: Request, { params }: RouteContext) {
         return { status: "expired" as const };
       }
 
-      await tx.$queryRaw`
-        SELECT id
-        FROM "Stock"
-        WHERE "productId" = ${current.productId}
-          AND "warehouseId" = ${current.warehouseId}
-        FOR UPDATE NOWAIT
-      `;
+      if (!isSQLite) {
+        await tx.$queryRaw`
+          SELECT id
+          FROM "Stock"
+          WHERE "productId" = ${current.productId}
+            AND "warehouseId" = ${current.warehouseId}
+          FOR UPDATE NOWAIT
+        `;
+      }
 
       await tx.stock.update({
         where: {

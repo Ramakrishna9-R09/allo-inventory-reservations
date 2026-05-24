@@ -9,7 +9,8 @@
     "lint": "next lint",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "seed": "prisma db seed"
+    "seed": "prisma db seed",
+    "use-sqlite": "node scripts/setup-sqlite.js"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

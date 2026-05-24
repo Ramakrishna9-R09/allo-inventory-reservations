@@ -1,7 +1,7 @@
-import { Prisma, ReservationStatus } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
-import { prisma } from "@/lib/db";
+import { prisma, ReservationStatus, isSQLite } from "@/lib/db";
 import { ApiException, apiError, exceptionResponse } from "@/lib/errors";
 import { ReservationIdSchema } from "@/lib/schemas";
 
@@ -37,14 +37,30 @@ export async function POST(_request: Request, { params }: RouteContext) {
     }
 
     const reservation = await prisma.$transaction(async (tx) => {
-      const rows = await tx.$queryRaw<LockedReservation[]>`
-        SELECT id, "productId", "warehouseId", quantity, status
-        FROM "Reservation"
-        WHERE id = ${parsed.data.id}
-        FOR UPDATE NOWAIT
-      `;
+      let current: LockedReservation | undefined;
 
-      const current = rows[0];
+      if (isSQLite) {
+        const res = await tx.reservation.findUnique({
+          where: { id: parsed.data.id },
+        });
+        if (res) {
+          current = {
+            id: res.id,
+            productId: res.productId,
+            warehouseId: res.warehouseId,
+            quantity: res.quantity,
+            status: res.status as ReservationStatus,
+          };
+        }
+      } else {
+        const rows = await tx.$queryRaw<LockedReservation[]>`
+          SELECT id, "productId", "warehouseId", quantity, status
+          FROM "Reservation"
+          WHERE id = ${parsed.data.id}
+          FOR UPDATE NOWAIT
+        `;
+        current = rows[0];
+      }
 
       if (!current) {
         throw new ApiException(404, "NOT_FOUND", "Reservation not found");
@@ -62,13 +78,15 @@ export async function POST(_request: Request, { params }: RouteContext) {
         );
       }
 
-      await tx.$queryRaw`
-        SELECT id
-        FROM "Stock"
-        WHERE "productId" = ${current.productId}
-          AND "warehouseId" = ${current.warehouseId}
-        FOR UPDATE NOWAIT
-      `;
+      if (!isSQLite) {
+        await tx.$queryRaw`
+          SELECT id
+          FROM "Stock"
+          WHERE "productId" = ${current.productId}
+            AND "warehouseId" = ${current.warehouseId}
+          FOR UPDATE NOWAIT
+        `;
+      }
 
       await tx.stock.update({
         where: {

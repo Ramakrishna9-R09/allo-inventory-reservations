@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
-import { prisma } from "@/lib/db";
+import { prisma, isSQLite } from "@/lib/db";
 import { ApiException, apiError, exceptionResponse } from "@/lib/errors";
 import { CreateReservationSchema } from "@/lib/schemas";
 
@@ -44,15 +44,34 @@ export async function POST(request: Request) {
     }
 
     const reservation = await prisma.$transaction(async (tx) => {
-      const rows = await tx.$queryRaw<LockedStock[]>`
-        SELECT id, total, reserved
-        FROM "Stock"
-        WHERE "productId" = ${input.productId}
-          AND "warehouseId" = ${input.warehouseId}
-        FOR UPDATE NOWAIT
-      `;
+      let stock: LockedStock | undefined;
 
-      const stock = rows[0];
+      if (isSQLite) {
+        const row = await tx.stock.findUnique({
+          where: {
+            productId_warehouseId: {
+              productId: input.productId,
+              warehouseId: input.warehouseId,
+            },
+          },
+        });
+        if (row) {
+          stock = {
+            id: row.id,
+            total: row.total,
+            reserved: row.reserved,
+          };
+        }
+      } else {
+        const rows = await tx.$queryRaw<LockedStock[]>`
+          SELECT id, total, reserved
+          FROM "Stock"
+          WHERE "productId" = ${input.productId}
+            AND "warehouseId" = ${input.warehouseId}
+          FOR UPDATE NOWAIT
+        `;
+        stock = rows[0];
+      }
 
       if (!stock) {
         throw new ApiException(404, "NOT_FOUND", "Stock row not found");
@@ -97,19 +116,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ reservation }, { status: 201 });
   } catch (error) {
-    if (isLockConflict(error)) {
-      return apiError(
-        409,
-        "LOCK_CONFLICT",
-        "Inventory is being reserved by another checkout. Please try again.",
-      );
-    }
-
-    if (
-      idempotencyKey &&
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2002"
-    ) {
+    if (idempotencyKey) {
       const existing = await prisma.reservation.findUnique({
         where: { idempotencyKey },
       });
@@ -117,6 +124,14 @@ export async function POST(request: Request) {
       if (existing) {
         return NextResponse.json({ reservation: existing }, { status: 200 });
       }
+    }
+
+    if (isLockConflict(error)) {
+      return apiError(
+        409,
+        "LOCK_CONFLICT",
+        "Inventory is being reserved by another checkout. Please try again.",
+      );
     }
 
     return exceptionResponse(error);
