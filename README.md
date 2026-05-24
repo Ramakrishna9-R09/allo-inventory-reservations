@@ -4,6 +4,8 @@ A Next.js 14 App Router take-home implementation for a concurrency-safe inventor
 
 This project features a high-fidelity **Developer Dashboard** supporting both **Light/Dark Mode** and an interactive **Concurrency Lab** to simulate split-second checkout races directly in the browser!
 
+🚀 **Live Production Deployment**: [https://allo-22mis1167.vercel.app](https://allo-22mis1167.vercel.app)
+
 ---
 
 ## 🚀 Local Setup (Zero-Setup SQLite or Hosted PostgreSQL)
